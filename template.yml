@@ -1,0 +1,147 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudFormation template to launch ECS cluster.
+
+Parameters:
+  Environment:
+    Description: Tag - Environment the resources should be associated with.
+    Type: String
+    Default: dev
+    AllowedValues: ['dev', 'qa', 'demo', 'prod']
+  ProjectPrefix:
+    Description: Name of the project
+    Type: String
+    Default: coi-external-demand-response
+  ECRRepoURI:
+    Description: Code ECR Repo URI
+    Type: String
+
+ 
+Resources:
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectPrefix}-preprocessor-lambda-${Environment}'
+      RetentionInDays: 7
+  LambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: !Sub '${ProjectPrefix}-${Environment}-lambda'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: '*'
+              - Sid: SqsPermissions
+                Effect: Allow
+                Action:
+                  - secretsmanager:*
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ec2:*
+                Resource: '*'
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic to the host
+      VpcId: vpc-0543ba4dcbad67cd8
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+
+  OrgFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ECRRepoURI
+      FunctionName: !Sub ${ProjectPrefix}-${Environment}
+      MemorySize: 1024
+      Environment:
+        Variables:       
+          ENV_TYPE: !Ref Environment
+      Role: !GetAtt LambdaIAMRole.Arn
+      Timeout: 900
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        SubnetIds:
+          - subnet-06eea31aa79b65bac
+          - subnet-0fa263087925c3d3f
+      
+  
+  ScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "ScheduledRule"
+      ScheduleExpression: "rate(15 minutes)"
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "OrgFunction"
+              - "Arn"
+          Id: "TargetFunctionV1"
+
+  PermissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref "OrgFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "ScheduledRule"
+          - "Arn"
+
+  #  LambdaFunction:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     Description: Lambda function to trigger SQS
+  #     CodeUri:
+  #       Bucket: !Ref CodeUriBucketName
+  #       Key: !Ref CodeUriCodeKey
+  #     FunctionName: !Sub ${ProjectPrefix}-${Environment}-lambda
+  #     Handler: org.demo.lambda.LambdaHandler::handleRequest
+  #     MemorySize: !Ref FunctionMemory
+  #     Environment:
+  #       Variables:
+  #         ENV_TYPE: !Ref Environment
+  #     Role: !GetAtt LambdaIAMRole.Arn
+  #     Runtime: java11
+  #     Timeout: 900
+  #     Events:
+  #       EnrollmentEndpoint:
+  #         Type: Api
+  #         Properties:
+  #           Method: post
+  #           Path: /dispatch

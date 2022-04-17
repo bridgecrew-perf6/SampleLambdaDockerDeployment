@@ -1,0 +1,31 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - chmod +x ./deploy_cf_stack.sh
+      - echo Fetching version of reboot.lambda...
+      - IMAGE_TAG=0.0.1 
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Copying lambda_function.py to deploy S3 bucket $DEPLOY_BUCKET...
+      - echo Building the Docker image...          
+      - |
+        docker build -f DockerFile \
+        --build-arg AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID \
+        --build-arg AWS_REGION=$AWS_DEFAULT_REGION \
+        --build-arg VERSION=$IMAGE_TAG \
+        -t $ECR_REPO:$IMAGE_TAG .
+      - docker tag $ECR_REPO:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
+  post_build:
+    commands:
+      - echo Creating new Lambda for org iLon Reboot...
+      - IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
+      - docker push $IMAGE_URI
+      # - sam build --template template.yml --base-dir ./ --use-container
+      # - sam package --template-file template.yml --s3-bucket org-cf-deploy-bucket --force-upload --output-template-file compiled-template.yml
+      # - sam deploy --debug --template-file compiled-template.yml --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --stack-name $DEPLOYMENT_ENV-producer-lambda --region $AWS_DEFAULT_REGION --parameter-overrides Environment=$DEPLOYMENT_ENV ProjectPrefix=ilon-automation-producer-lambda SQSURL=$QUEUE_URL DBSecret=$DB_SECRET iLonInstance=$INSTANCE_ID DBHost=$DB_ENDPOINT CodeUriBucketName=$DEPLOY_BUCKET CodeUriCodeKey=./producer-lambda/producer --no-fail-on-empty-changeset --tags Environment=$DEPLOYMENT_ENV Contact=dhruv@orgempowerment.com
+      - ./deploy_cf_stack.sh producer-lambda/producer template $DEPLOYMENT_ENV-producer-lambda "Environment=$DEPLOYMENT_ENV ProjectPrefix=producer-lambda ECRRepoURI=$IMAGE_URI" "Environment=$DEPLOYMENT_ENV Contact=user@random.com" org-cf-deploy-bucket $IMAGE_URI
+      - echo Finished deploying SQS and Lambda function...
